@@ -36,33 +36,42 @@ A powerful cloud-based AI assistant designed for medical document analysis and h
 
 ### Backend Setup (FastAPI)
 
-1. **Create a virtual environment:**
+1. **Clone the repository:**
    ```bash
-   cd Cloud_AI_Assistant
+   git clone <your-repo-url>
+   cd Medical_Bot
+   ```
+
+2. **Create a virtual environment:**
+   ```bash
    python -m venv venv
-   
+
    # On Windows
    venv\Scripts\activate
-   
+
    # On macOS/Linux
    source venv/bin/activate
    ```
 
-2. **Install dependencies:**
+3. **Install dependencies:**
    ```bash
    pip install -r requirements.txt
    ```
 
-3. **Set up environment variables:**
+4. **Set up environment variables:**
    ```bash
-   # Create .env file
-   copy .env.example .env
-   
+   # Create .env file in the root directory
+   # On Windows
+   copy NUL .env
+
+   # On macOS/Linux
+   touch .env
+
    # Edit .env and add your Google API key:
    GOOGLE_API_KEY=your_google_api_key_here
    ```
 
-4. **Run the FastAPI server:**
+5. **Run the FastAPI server:**
    ```bash
    python app.py
    ```
@@ -140,22 +149,30 @@ GOOGLE_API_KEY=your_google_api_key_here
 ## File Structure
 
 ```
-Cloud_AI_Assistant/
+Medical_Bot/
 ├── app.py                 # FastAPI backend application
 ├── requirements.txt       # Python dependencies
-├── .env.example          # Environment variables template
+├── .env                  # Environment variables (create this)
+├── .gitignore            # Git ignore rules
 ├── README.md             # This file
+├── list_models.py        # Utility to list available models
+├── test_api.rest         # API testing file
 ├── my-app/               # Next.js frontend
 │   ├── app/              # Next.js app directory
 │   │   ├── api/          # API routes
+│   │   │   ├── chat/     # Chat endpoint
+│   │   │   └── upload/   # Upload endpoint
 │   │   ├── globals.css   # Global styles
 │   │   ├── layout.tsx    # Root layout
 │   │   └── page.tsx      # Main page component
 │   ├── components/       # UI components
+│   │   └── ui/          # Shadcn/ui components
 │   ├── lib/             # Utility functions
 │   ├── package.json     # Node.js dependencies
-│   └── tailwind.config.js # Tailwind configuration
-└── faiss_index/         # Generated FAISS vector database
+│   ├── tailwind.config.ts # Tailwind configuration
+│   └── tsconfig.json    # TypeScript configuration
+├── uploads/              # Uploaded PDF files (generated)
+└── faiss_index/          # Generated FAISS vector database
 ```
 
 ## Troubleshooting

@@ -1,359 +1,374 @@
-'use client';
+"use client"
 
-import { useState, useRef, useEffect } from 'react';
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
-import { ScrollArea } from "@/components/ui/scroll-area";
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
-import { Send, Bot, User, Loader2, Upload, FileText, Cloud, AlertCircle, CloudUpload, Brain, Sparkles } from 'lucide-react';
+import type React from "react"
+
+import { useState, useRef, useEffect } from "react"
+import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
+import { Card } from "@/components/ui/card"
+import { ScrollArea } from "@/components/ui/scroll-area"
+import { Avatar, AvatarFallback } from "@/components/ui/avatar"
+import { Send, Loader2, FileText, AlertCircle, Database, Upload, Activity, FileSearch } from "lucide-react"
 
 interface Message {
-  id: string;
-  role: 'user' | 'assistant';
-  content: string;
-  sourceDocuments?: string[];
+  id: string
+  role: "user" | "assistant"
+  content: string
+  sourceDocuments?: Array<{ name: string; page?: number }>
 }
 
-export default function MedicalBotInterface() {
-  const [messages, setMessages] = useState<Message[]>([]);
-  const [input, setInput] = useState('');
-  const [isLoading, setIsLoading] = useState(false);
-  const [files, setFiles] = useState<FileList | null>(null);
-  const [isUploading, setIsUploading] = useState(false);
-  const [uploadedFiles, setUploadedFiles] = useState<string[]>([]);
-  const [error, setError] = useState('');
-  const messagesEndRef = useRef<HTMLDivElement>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
+export default function Home() {
+  const [messages, setMessages] = useState<Message[]>([])
+  const [input, setInput] = useState("")
+  const [isLoading, setIsLoading] = useState(false)
+  const [isUploading, setIsUploading] = useState(false)
+  const [uploadedFiles, setUploadedFiles] = useState<string[]>([])
+  const [error, setError] = useState<string>("")
+  const fileInputRef = useRef<HTMLInputElement>(null)
+  const scrollAreaRef = useRef<HTMLDivElement>(null)
 
-  const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  };
-
+  // Auto-scroll to latest message
   useEffect(() => {
-    scrollToBottom();
-  }, [messages]);
-
-  const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const selectedFiles = event.target.files;
-    if (!selectedFiles || selectedFiles.length === 0) return;
-
-    // Validate that all files are PDFs
-    for (const file of selectedFiles) {
-      if (!file.name.toLowerCase().endsWith('.pdf')) {
-        setError('Only PDF files are allowed');
-        return;
+    if (scrollAreaRef.current) {
+      const scrollContainer = scrollAreaRef.current.querySelector("[data-radix-scroll-area-viewport]")
+      if (scrollContainer) {
+        scrollContainer.scrollTop = scrollContainer.scrollHeight
       }
     }
+  }, [messages])
 
-    setIsUploading(true);
-    setError('');
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files
+    if (!files) return
+
+    setIsUploading(true)
+    setError("")
 
     try {
-      const formData = new FormData();
-      for (const file of selectedFiles) {
-        formData.append('files', file);
-      }
+      const formData = new FormData()
+      Array.from(files).forEach((file) => {
+        formData.append("files", file)
+      })
 
-      const response = await fetch('/api/upload', {
-        method: 'POST',
+      const response = await fetch("/api/upload", {
+        method: "POST",
         body: formData,
-      });
+      })
 
       if (!response.ok) {
-        throw new Error('Failed to upload files');
+        const errorData = await response.json().catch(() => ({ error: "Upload failed" }))
+        throw new Error(errorData.error || "Upload failed")
       }
 
-      const result = await response.json();
-      setUploadedFiles(prev => [...prev, ...Array.from(selectedFiles).map(f => f.name)]);
-      
-      // Add a system message about successful upload
-      const uploadMessage: Message = {
-        id: Date.now().toString(),
-        role: 'assistant',
-        content: `Successfully uploaded ${selectedFiles.length} PDF file(s). You can now ask questions about the content.`,
-      };
-      setMessages(prev => [...prev, uploadMessage]);
-      
-    } catch (error) {
-      console.error('Upload error:', error);
-      setError('Failed to upload files. Please try again.');
+      const data = await response.json()
+      setUploadedFiles((prev) => [...prev, ...data.fileNames])
+      setError("")
+    } catch (err) {
+      setError("Failed to upload files. Please try again.")
+      console.error(err)
     } finally {
-      setIsUploading(false);
+      setIsUploading(false)
       if (fileInputRef.current) {
-        fileInputRef.current.value = '';
+        fileInputRef.current.value = ""
       }
     }
-  };
+  }
 
-  const sendMessage = async (userMessage: string) => {
-    if (!userMessage.trim()) return;
+  const handleSendMessage = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!input.trim() || isLoading) return
 
-    const userMsg: Message = {
+    const userMessage: Message = {
       id: Date.now().toString(),
-      role: 'user',
-      content: userMessage,
-    };
-    
-    setMessages(prev => [...prev, userMsg]);
-    setIsLoading(true);
-    setError('');
+      role: "user",
+      content: input,
+    }
+
+    setMessages((prev) => [...prev, userMessage])
+    setInput("")
+    setIsLoading(true)
+    setError("")
 
     try {
-      const response = await fetch('/api/chat', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+      const response = await fetch("/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          messages: [{ role: 'user', content: userMessage }]
+          message: input,
+          uploadedFiles,
         }),
-      });
+      })
 
       if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || 'Failed to get response');
+        throw new Error("Chat request failed")
       }
 
-      const data = await response.json();
-      
-      const assistantMsg: Message = {
+      const data = await response.json()
+      const assistantMessage: Message = {
         id: (Date.now() + 1).toString(),
-        role: 'assistant',
-        content: data.content || data.answer,
-        sourceDocuments: data.sourceDocuments || data.source_documents,
-      };
-      
-      setMessages(prev => [...prev, assistantMsg]);
-    } catch (error) {
-      console.error('Chat error:', error);
-      setError(error instanceof Error ? error.message : 'An error occurred');
+        role: "assistant",
+        content: data.response,
+        sourceDocuments: data.sourceDocuments,
+      }
+
+      setMessages((prev) => [...prev, assistantMessage])
+    } catch (err) {
+      setError("Failed to get response. Please try again.")
+      console.error(err)
     } finally {
-      setIsLoading(false);
+      setIsLoading(false)
     }
-  };
-
-  const handleSubmit = (e: React.FormEvent<HTMLFormElement>) => {
-    e.preventDefault();
-    if (!input.trim() || isLoading) return;
-    
-    sendMessage(input);
-    setInput('');
-  };
-
-  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    setInput(e.target.value);
-  };
+  }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-sky-50 via-cloud-50 to-blue-100 p-4">
-      <div className="mx-auto max-w-4xl">
-        <div className="mb-6 text-center">
-          <div className="flex items-center justify-center gap-3 mb-2">
-            <div className="relative">
-              <Cloud className="h-8 w-8 text-sky-600" />
-              <Sparkles className="h-4 w-4 text-yellow-500 absolute -top-1 -right-1" />
+    <div className="min-h-screen bg-gradient-to-b from-blue-50 via-indigo-50 to-purple-50 p-4">
+      <div className="mx-auto max-w-5xl space-y-6">
+        {/* Header */}
+        <div className="relative space-y-3 pt-8">
+          <div className="flex items-start justify-between">
+            <div>
+              <div className="flex items-center gap-3">
+                <div className="relative">
+                  <Database className="h-10 w-10 text-indigo-600" />
+                  <Activity className="absolute -bottom-1 -right-1 h-5 w-5 text-purple-600" />
+                </div>
+                <div>
+                  <h1 className="text-3xl font-bold text-gray-900">Medical Document Analysis System</h1>
+                  <p className="text-sm text-indigo-600 font-medium">Retrieval-Augmented Generation Pipeline</p>
+                </div>
+              </div>
+              <p className="mt-3 text-gray-600 max-w-2xl">
+                Cloud-based RAG implementation for intelligent healthcare documentation processing using Google Gemini and FAISS vector store
+              </p>
             </div>
-            <h1 className="text-3xl font-bold text-gray-900">Cloud AI Assistant</h1>
+            <FileSearch className="h-6 w-6 text-indigo-600" />
           </div>
-          <p className="text-gray-600">Upload documents to the cloud and ask questions powered by AI</p>
         </div>
 
-        {/* File Upload Section */}
-        <Card className="mb-4 shadow-lg">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <CloudUpload className="h-5 w-5 text-sky-600" />
-              Cloud Document Upload
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="space-y-4">
-              <div className="flex items-center gap-4">
-                <input
-                  type="file"
-                  ref={fileInputRef}
-                  onChange={handleFileUpload}
-                  accept=".pdf"
-                  multiple
-                  className="hidden"
-                />
-                <Button
-                  onClick={() => fileInputRef.current?.click()}
-                  disabled={isUploading}
-                  variant="outline"
-                  className="flex items-center gap-2"
-                >
-                  {isUploading ? (
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                  ) : (
-                    <FileText className="h-4 w-4" />
-                  )}
-                  {isUploading ? 'Uploading...' : 'Select PDF Files'}
-                </Button>
-                <span className="text-sm text-gray-500">
-                  Upload documents to the cloud (PDF only)
-                </span>
+        {/* Error Message */}
+        {error && (
+          <div className="flex gap-2 rounded-lg bg-red-50 p-4 border border-red-200">
+            <AlertCircle className="h-5 w-5 flex-shrink-0 text-red-600" />
+            <p className="text-sm text-red-700">{error}</p>
+          </div>
+        )}
+
+        {/* Document Upload Card */}
+        <Card className="border-indigo-200 shadow-lg bg-gradient-to-br from-white to-indigo-50/30">
+          <div className="space-y-4 p-6">
+            <div className="flex items-center gap-3">
+              <div className="p-2 bg-indigo-100 rounded-lg">
+                <Upload className="h-5 w-5 text-indigo-700" />
               </div>
-              
-              {uploadedFiles.length > 0 && (
-                <div className="bg-green-50 p-3 rounded-lg">
-                  <h4 className="font-medium text-green-800 mb-2">Uploaded Files:</h4>
-                  <ul className="space-y-1">
-                    {uploadedFiles.map((filename, index) => (
-                      <li key={index} className="text-sm text-green-700 flex items-center gap-2">
-                        <FileText className="h-3 w-3" />
-                        {filename}
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-              
-              {error && (
-                <div className="bg-red-50 p-3 rounded-lg flex items-center gap-2">
-                  <AlertCircle className="h-4 w-4 text-red-600" />
-                  <span className="text-sm text-red-700">{error}</span>
-                </div>
-              )}
+              <div>
+                <h2 className="text-lg font-semibold text-gray-900">Document Ingestion Module</h2>
+                <p className="text-xs text-gray-600">Upload medical PDF documents for RAG processing</p>
+              </div>
             </div>
-          </CardContent>
-        </Card>
 
-        {/* Chat Interface */}
-        <Card className="h-[60vh] flex flex-col shadow-xl">
-          <CardHeader className="border-b bg-white/50 backdrop-blur">
-            <CardTitle className="flex items-center gap-2">
-              <div className="relative">
-                <Cloud className="h-5 w-5 text-sky-600" />
-                <Brain className="h-3 w-3 text-purple-500 absolute -bottom-1 -right-1" />
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".pdf"
+              multiple
+              onChange={handleFileUpload}
+              className="hidden"
+            />
+
+            <Button
+              onClick={() => fileInputRef.current?.click()}
+              disabled={isUploading}
+              className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-medium"
+            >
+              {isUploading ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Processing Documents...
+                </>
+              ) : (
+                <>
+                  <FileText className="mr-2 h-4 w-4" />
+                  Upload Medical Documents (PDF)
+                </>
+              )}
+            </Button>
+
+            <div className="flex items-start gap-2 text-xs text-gray-600 bg-blue-50 p-3 rounded-lg border border-blue-200">
+              <AlertCircle className="h-4 w-4 flex-shrink-0 text-blue-600 mt-0.5" />
+              <div>
+                <p className="font-medium text-blue-900">RAG Pipeline Features:</p>
+                <ul className="mt-1 space-y-0.5 list-disc list-inside">
+                  <li>Automatic text extraction and chunking (10k chars, 1k overlap)</li>
+                  <li>HuggingFace embeddings (sentence-transformers/all-MiniLM-L6-v2)</li>
+                  <li>FAISS vector store for efficient similarity search</li>
+                </ul>
               </div>
-              Cloud AI Assistant
-            </CardTitle>
-          </CardHeader>
+            </div>
 
-          <CardContent className="flex-1 p-0 overflow-hidden">
-            <ScrollArea className="h-full">
-              <div className="p-4">
-              {messages.length === 0 ? (
-                <div className="flex flex-col items-center justify-center h-full text-center">
-                  <div className="relative mb-4">
-                    <Cloud className="h-12 w-12 text-gray-400" />
-                    <Sparkles className="h-6 w-6 text-yellow-400 absolute -top-1 -right-1" />
-                  </div>
-                  <h3 className="text-lg font-semibold text-gray-700 mb-2">
-                    Welcome to Cloud AI Assistant!
-                  </h3>
-                  <p className="text-gray-500 max-w-md">
-                    Upload your documents to the cloud above, then ask me questions about their content.
-                    I can help analyze, summarize, and provide insights from your documents using powerful AI.
+            {/* Success Indicator */}
+            {uploadedFiles.length > 0 && (
+              <div className="rounded-lg bg-green-50 p-4 border border-green-200">
+                <div className="flex items-center gap-2 mb-2">
+                  <div className="h-2 w-2 bg-green-500 rounded-full animate-pulse"></div>
+                  <p className="text-sm font-semibold text-green-900">
+                    Vector Store Active - {uploadedFiles.length} document{uploadedFiles.length !== 1 ? "s" : ""} indexed
                   </p>
                 </div>
-              ) : (
-                <div className="space-y-4">
-                  {messages.map((message) => (
+                <ul className="space-y-1.5">
+                  {uploadedFiles.map((file, idx) => (
+                    <li key={file} className="text-sm text-green-700 flex items-center gap-2">
+                      <span className="font-mono text-xs bg-green-100 px-2 py-0.5 rounded">Doc {idx + 1}</span>
+                      <span>{file}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
+        </Card>
+
+        {/* Chat Interface Card */}
+        <Card className="border-indigo-200 shadow-lg">
+          <div className="flex h-[60vh] flex-col">
+            {/* Chat Header */}
+            <div className="border-b border-indigo-200 bg-gradient-to-r from-indigo-50 to-purple-50 p-4">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <div className="relative">
+                    <Database className="h-5 w-5 text-indigo-600" />
+                    <Activity className="absolute -bottom-1 -right-1 h-3 w-3 text-purple-600" />
+                  </div>
+                  <div>
+                    <h3 className="font-semibold text-gray-900">Query Processing Interface</h3>
+                    <p className="text-xs text-gray-600">Gemini-1.5-Flash with RAG</p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-1.5 text-xs">
+                  <div className="h-2 w-2 bg-green-500 rounded-full animate-pulse"></div>
+                  <span className="text-green-700 font-medium">Active</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Messages Area */}
+            <ScrollArea ref={scrollAreaRef} className="flex-1">
+              <div className="space-y-4 p-4">
+                {messages.length === 0 ? (
+                  <div className="flex h-full flex-col items-center justify-center space-y-4 py-12">
+                    <div className="relative">
+                      <Database className="h-16 w-16 text-indigo-200" />
+                      <FileSearch className="absolute -bottom-2 -right-2 h-8 w-8 text-indigo-400" />
+                    </div>
+                    <div className="text-center max-w-md">
+                      <h4 className="text-lg font-semibold text-gray-900">Medical Document Analysis Ready</h4>
+                      <p className="mt-2 text-sm text-gray-600">
+                        Upload medical documents above and ask questions. The RAG pipeline will retrieve relevant information and generate accurate responses.
+                      </p>
+                      <div className="mt-4 flex items-center justify-center gap-4 text-xs text-gray-500">
+                        <span className="flex items-center gap-1">
+                          <Database className="h-3 w-3" /> FAISS
+                        </span>
+                        <span>•</span>
+                        <span className="flex items-center gap-1">
+                          <Activity className="h-3 w-3" /> Gemini
+                        </span>
+                        <span>•</span>
+                        <span>RAG Pipeline</span>
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  messages.map((message) => (
                     <div
                       key={message.id}
-                      className={`flex gap-3 ${
-                        message.role === 'user' ? 'justify-end' : 'justify-start'
-                      }`}
+                      className={`flex gap-3 ${message.role === "user" ? "justify-end" : "justify-start"}`}
                     >
-                      {message.role === 'assistant' && (
-                        <Avatar className="h-8 w-8 bg-sky-600">
-                          <AvatarFallback>
-                            <Cloud className="h-4 w-4 text-white" />
+                      {message.role === "assistant" && (
+                        <Avatar className="h-8 w-8 flex-shrink-0">
+                          <AvatarFallback className="bg-gradient-to-br from-indigo-600 to-purple-600">
+                            <Database className="h-4 w-4 text-white" />
                           </AvatarFallback>
                         </Avatar>
                       )}
-                      
-                      <div className="max-w-[80%] min-w-0 space-y-2">
-                        <div
-                          className={`rounded-lg px-4 py-2 break-words overflow-wrap-anywhere ${
-                            message.role === 'user'
-                              ? 'bg-sky-600 text-white'
-                              : 'bg-gray-100 text-gray-900'
-                          }`}
-                        >
-                          <p className="text-sm leading-relaxed whitespace-pre-wrap break-words overflow-wrap-anywhere">
-                            {message.content}
-                          </p>
-                        </div>
-                        
-                        {message.sourceDocuments && message.sourceDocuments.length > 0 && (
-                          <div className="bg-sky-50 p-3 rounded-lg border-l-4 border-sky-200">
-                            <p className="text-xs font-medium text-sky-800 mb-1">Source Documents:</p>
-                            {message.sourceDocuments.map((doc, index) => (
-                              <p key={index} className="text-xs text-sky-700 italic">
-                                "{doc}"
-                              </p>
-                            ))}
+
+                      <div
+                        className={`max-w-md rounded-lg px-4 py-3 ${
+                          message.role === "user"
+                            ? "bg-gradient-to-br from-indigo-600 to-purple-600 text-white"
+                            : "bg-gray-100 text-gray-900 border border-gray-200"
+                        }`}
+                      >
+                        <p className="text-sm leading-relaxed">{message.content}</p>
+                        {message.role === "assistant" && message.sourceDocuments && message.sourceDocuments.length > 0 && (
+                          <div className="mt-2 pt-2 border-t border-gray-300">
+                            <p className="text-xs font-medium text-gray-600 mb-1">Sources:</p>
+                            <div className="text-xs text-gray-500 space-y-0.5">
+                              {message.sourceDocuments.slice(0, 2).map((doc, idx) => (
+                                <div key={idx} className="truncate">• {doc.name}</div>
+                              ))}
+                            </div>
                           </div>
                         )}
                       </div>
 
-                      {message.role === 'user' && (
-                        <Avatar className="h-8 w-8 bg-gray-600">
-                          <AvatarFallback>
-                            <User className="h-4 w-4 text-white" />
-                          </AvatarFallback>
+                      {message.role === "user" && (
+                        <Avatar className="h-8 w-8 flex-shrink-0">
+                          <AvatarFallback className="bg-gray-700">U</AvatarFallback>
                         </Avatar>
                       )}
                     </div>
-                  ))}
+                  ))
+                )}
 
-                  {isLoading && (
-                    <div className="flex gap-3 justify-start">
-                      <Avatar className="h-8 w-8 bg-sky-600">
-                        <AvatarFallback>
-                          <Cloud className="h-4 w-4 text-white" />
-                        </AvatarFallback>
-                      </Avatar>
-                      <div className="bg-gray-100 rounded-lg px-4 py-2">
-                        <div className="flex items-center gap-2">
-                          <Loader2 className="h-4 w-4 animate-spin" />
-                          <span className="text-sm text-gray-600">Processing in the cloud...</span>
-                        </div>
+                {isLoading && (
+                  <div className="flex gap-3">
+                    <Avatar className="h-8 w-8 flex-shrink-0">
+                      <AvatarFallback className="bg-gradient-to-br from-indigo-600 to-purple-600">
+                        <Database className="h-4 w-4 text-white" />
+                      </AvatarFallback>
+                    </Avatar>
+                    <div className="flex items-center gap-2 rounded-lg bg-gradient-to-r from-indigo-50 to-purple-50 border border-indigo-200 px-4 py-3">
+                      <Loader2 className="h-4 w-4 animate-spin text-indigo-600" />
+                      <div className="text-sm">
+                        <span className="text-indigo-900 font-medium">Processing query...</span>
+                        <p className="text-xs text-gray-600">Retrieving from vector store</p>
                       </div>
                     </div>
-                  )}
-                  
-                  <div ref={messagesEndRef} />
-                </div>
-              )}
+                  </div>
+                )}
               </div>
             </ScrollArea>
-          </CardContent>
 
-          <CardFooter className="border-t bg-white/50 backdrop-blur p-4">
-            <form onSubmit={handleSubmit} className="flex w-full gap-2">
-              <Input
-                value={input}
-                onChange={handleInputChange}
-                placeholder="Ask questions about your documents..."
-                disabled={isLoading}
-                className="flex-1"
-                autoFocus
-              />
-              <Button 
-                type="submit" 
-                disabled={isLoading || !input.trim()}
-                size="icon"
-                className="bg-sky-600 hover:bg-sky-700"
-              >
-                {isLoading ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                ) : (
-                  <Send className="h-4 w-4" />
-                )}
-              </Button>
-            </form>
-          </CardFooter>
+            {/* Message Input */}
+            <div className="border-t border-indigo-200 bg-gradient-to-r from-indigo-50/50 to-purple-50/50 backdrop-blur p-4">
+              <form onSubmit={handleSendMessage} className="flex gap-2">
+                <Input
+                  value={input}
+                  onChange={(e) => setInput(e.target.value)}
+                  placeholder="Enter medical query for RAG processing..."
+                  disabled={isLoading}
+                  className="flex-1 border-indigo-200 focus:border-indigo-400"
+                />
+                <Button
+                  type="submit"
+                  disabled={isLoading || !input.trim()}
+                  className="bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 text-white font-medium"
+                >
+                  {isLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+                </Button>
+              </form>
+            </div>
+          </div>
         </Card>
 
-        <div className="mt-4 text-center text-sm text-gray-500">
-          ☁️ Powered by Cloud AI and RAG Technology ☁️
+        {/* Footer */}
+        <div className="text-center text-sm text-gray-600 pb-8 space-y-1">
+          <p className="font-medium">Powered by Google Gemini-1.5-Flash • FAISS Vector Store • RAG Pipeline</p>
+          <p className="text-xs text-gray-500">
+            Cloud-Based Medical Document Analysis System | Dayananda Sagar College of Engineering
+          </p>
         </div>
       </div>
     </div>
-  );
+  )
 }

@@ -13,8 +13,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Cloud AI Assistant - Smart Document Analysis",
-  description: "Upload documents to the cloud and get AI-powered insights using RAG technology and advanced language models",
+  title: "Medical Document Analysis System | RAG Pipeline",
+  description: "Cloud-based medical document analysis system using Retrieval-Augmented Generation (RAG) pipeline with Google Gemini and FAISS vector store for intelligent healthcare documentation processing",
 };
 
 export default function RootLayout({

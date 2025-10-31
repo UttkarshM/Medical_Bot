@@ -1,55 +1,52 @@
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from "next/server"
 
-// Allow streaming responses up to 30 seconds
-export const maxDuration = 30;
+const BACKEND_URL = process.env.BACKEND_URL || "http://localhost:8000"
 
-export async function POST(req: Request) {
+export async function POST(request: NextRequest) {
   try {
-    const { messages } = await req.json();
-    
-    // Get the last user message
-    const lastMessage = messages[messages.length - 1];
-    const userQuestion = lastMessage?.content || lastMessage?.parts?.find((part: any) => part.type === 'text')?.text;
-    
-    if (!userQuestion) {
-      return NextResponse.json({ error: 'No question provided' }, { status: 400 });
+    const body = await request.json()
+    const { message } = body
+
+    if (!message) {
+      return NextResponse.json(
+        { error: "Message is required" },
+        { status: 400 }
+      )
     }
 
-    // Call the FastAPI backend
-    const response = await fetch('http://localhost:8000/chat', {
-      method: 'POST',
+    // Forward the question to the Flask backend
+    const response = await fetch(`${BACKEND_URL}/chat`, {
+      method: "POST",
       headers: {
-        'Content-Type': 'application/json',
+        "Content-Type": "application/json",
       },
-      body: JSON.stringify({ question: userQuestion }),
-    });
+      body: JSON.stringify({
+        question: message,
+      }),
+    })
 
     if (!response.ok) {
-      const errorData = await response.json();
-      return NextResponse.json({ 
-        error: errorData.detail || 'Failed to get response from medical bot' 
-      }, { status: response.status });
+      const error = await response.json()
+      return NextResponse.json(
+        { error: error.error || "Chat request failed" },
+        { status: response.status }
+      )
     }
 
-    const data = await response.json();
-    
-    // Return the response in the expected format for the chat interface
-    return new Response(
-      JSON.stringify({
-        role: 'assistant',
-        content: data.answer,
-        sourceDocuments: data.source_documents
-      }),
-      {
-        headers: {
-          'Content-Type': 'application/json',
-        },
-      }
-    );
+    const data = await response.json()
+
+    return NextResponse.json({
+      response: data.answer,
+      sourceDocuments: data.source_documents?.map((doc: string, idx: number) => ({
+        name: `Source ${idx + 1}`,
+        content: doc,
+      })) || [],
+    })
   } catch (error) {
-    console.error('Error in chat API:', error);
-    return NextResponse.json({ 
-      error: 'Internal server error. Make sure the FastAPI backend is running on http://localhost:8000' 
-    }, { status: 500 });
+    console.error("Chat error:", error)
+    return NextResponse.json(
+      { error: "Failed to process chat request" },
+      { status: 500 }
+    )
   }
 }

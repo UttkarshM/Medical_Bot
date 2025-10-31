@@ -99,3 +99,25 @@ secrets.json
 *.pem
 *.key
 
+# Project-specific
+# Uploaded files
+uploads/
+*.pdf
+!requirements.txt
+
+# FAISS index files
+faiss_index/
+
+# Test files
+test_api.rest
+list_models.py
+
+# Node modules from frontend subfolders
+medical-bot-frontend/node_modules/
+my-app/node_modules/
+
+# Setup guides (generated)
+setup-guide.md
+
+
+test_api.rest

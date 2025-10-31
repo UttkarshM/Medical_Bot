@@ -1,232 +1,234 @@
-from fastapi import FastAPI, HTTPException, UploadFile, File
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
-from typing import List, Optional
-import os
-import tempfile
+from flask import Flask, jsonify, request
+from flask_cors import CORS
 from PyPDF2 import PdfReader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_google_genai import GoogleGenerativeAIEmbeddings, ChatGoogleGenerativeAI
+from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_community.vectorstores import FAISS
-from langchain.prompts import PromptTemplate
-from langchain.chains.question_answering import load_qa_chain
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_core.prompts import ChatPromptTemplate
 from dotenv import load_dotenv
-import uvicorn
-import logging
+import os
 
 load_dotenv()
 
-app = FastAPI(title="Cloud AI Assistant API", description="Cloud-powered RAG chatbot API for document analysis", version="1.0.0")
+app = Flask(__name__)
+CORS(app)
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-class QuestionRequest(BaseModel):
-    question: str
-
-class ChatResponse(BaseModel):
-    answer: str
-    source_documents: Optional[List[str]] = None
-
-class UploadResponse(BaseModel):
-    message: str
-    files_processed: int
-
+uploaded_files = []
 vector_store = None
-conversation_chain = None
 
-def get_pdf_text(pdf_files: List[str]) -> str:
-    """Extract text from PDF files"""
-    text = ""
-    for pdf_path in pdf_files:
-        try:
+@app.route('/health')
+def health():
+    return jsonify({
+        "status": "healthy",
+        "app": "Flask Hello World"
+    })
+
+@app.route('/upload', methods=['POST'])
+def upload_file():
+    """Upload file endpoint - receives files, saves them, and processes them"""
+    global uploaded_files, vector_store
+
+    if 'files' not in request.files:
+        return jsonify({"error": "No files provided"}), 400
+
+    files = request.files.getlist('files')
+    if not files:
+        return jsonify({"error": "No files provided"}), 400
+
+    file_names = []
+    upload_folder = 'uploads'
+    os.makedirs(upload_folder, exist_ok=True)
+
+    # Save all uploaded files
+    for file in files:
+        if file.filename == '':
+            continue
+
+        filename = file.filename
+        file_names.append(filename)
+        file_path = os.path.join(upload_folder, filename)
+        file.save(file_path)
+
+    uploaded_files.extend(file_names)
+
+    # Automatically process the uploaded files
+    try:
+        # Step 1: Extract text from PDFs
+        text = ""
+        for filename in file_names:
+            pdf_path = os.path.join(upload_folder, filename)
             pdf_reader = PdfReader(pdf_path)
             for page in pdf_reader.pages:
                 text += page.extract_text()
-        except Exception as e:
-            logger.error(f"Error reading PDF {pdf_path}: {str(e)}")
-            raise HTTPException(status_code=500, detail=f"Error reading PDF: {str(e)}")
-    return text
 
-def get_text_chunks(text: str) -> List[str]:
-    """Split text into chunks"""
-    text_splitter = RecursiveCharacterTextSplitter(
-        chunk_size=10000, 
-        chunk_overlap=1000
-    )
-    chunks = text_splitter.split_text(text)
-    return chunks
+        if not text.strip():
+            return jsonify({"error": "No text extracted from PDFs"}), 400
 
-def create_vector_store(text_chunks: List[str]) -> FAISS:
-    """Create FAISS vector store from text chunks"""
-    try:
-        embeddings = GoogleGenerativeAIEmbeddings(
-            model="models/embedding-001",
-            google_api_key=os.getenv("GOOGLE_API_KEY")
+        # Step 2: Split text into chunks
+        text_splitter = RecursiveCharacterTextSplitter(
+            chunk_size=10000,
+            chunk_overlap=1000
         )
-        vector_store = FAISS.from_texts(text_chunks, embedding=embeddings)
+        chunks = text_splitter.split_text(text)
+
+        # Step 3: Create embeddings and FAISS index
+        embeddings = HuggingFaceEmbeddings(
+            model_name="sentence-transformers/all-MiniLM-L6-v2",
+            model_kwargs={'device': 'cpu'},
+            encode_kwargs={'normalize_embeddings': True}
+        )
+
+        vector_store = FAISS.from_texts(chunks, embedding=embeddings)
         vector_store.save_local("faiss_index")
-        return vector_store
+
+        return jsonify({
+            "message": "Files uploaded and processed successfully",
+            "files": file_names,
+            "total_files": len(file_names),
+            "chunks_created": len(chunks),
+            "status": "FAISS index created"
+        }), 200
+
     except Exception as e:
-        logger.error(f"Error creating vector store: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error creating vector store: {str(e)}")
+        return jsonify({"error": f"Processing failed: {str(e)}"}), 500
 
-def get_conversational_chain():
-    """Create conversational chain"""
-    prompt_template = """
-    Answer the question as detailed as possible from the provided context. Make sure to provide all the details. 
-    If the answer is not in the provided context, just say "answer is not available in the context". 
-    Don't provide the wrong answer.
 
-    Context:
-    {context}
+@app.route('/process', methods=['POST'])
+def process_documents():
+    """Process uploaded PDFs - extract text, chunk, and create FAISS index"""
+    global vector_store
 
-    Question: 
-    {question}
+    # Check if files exist in uploads folder
+    upload_folder = 'uploads'
+    if not os.path.exists(upload_folder):
+        return jsonify({"error": "No files uploaded yet"}), 400
 
-    Answer:
-    """
+    pdf_files = [f for f in os.listdir(upload_folder) if f.endswith('.pdf')]
+    if not pdf_files:
+        return jsonify({"error": "No PDF files found"}), 400
 
     try:
-        model = ChatGoogleGenerativeAI(
-            model="gemini-1.5-flash",
-            temperature=0.3,
-            google_api_key=os.getenv("GOOGLE_API_KEY")
-        )
-        prompt = PromptTemplate(
-            template=prompt_template, 
-            input_variables=["context", "question"]
-        )
-        chain = load_qa_chain(model, chain_type="stuff", prompt=prompt)
-        return chain
-    except Exception as e:
-        logger.error(f"Error creating conversational chain: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error creating conversational chain: {str(e)}")
+        # Step 1: Extract text from PDFs
+        text = ""
+        for pdf_file in pdf_files:
+            pdf_path = os.path.join(upload_folder, pdf_file)
+            pdf_reader = PdfReader(pdf_path)
+            for page in pdf_reader.pages:
+                text += page.extract_text()
 
-def process_user_input(user_question: str) -> dict:
-    """Process user question and return response"""
-    try:
-        embeddings = GoogleGenerativeAIEmbeddings(
-            model="models/embedding-001",
-            google_api_key=os.getenv("GOOGLE_API_KEY")
+        if not text.strip():
+            return jsonify({"error": "No text extracted from PDFs"}), 400
+
+        # Step 2: Split text into chunks
+        text_splitter = RecursiveCharacterTextSplitter(
+            chunk_size=10000,
+            chunk_overlap=1000
         )
-        
+        chunks = text_splitter.split_text(text)
+
+        # Step 3: Create embeddings and FAISS index
+        embeddings = HuggingFaceEmbeddings(
+            model_name="sentence-transformers/all-MiniLM-L6-v2",
+            model_kwargs={'device': 'cpu'},
+            encode_kwargs={'normalize_embeddings': True}
+        )
+
+        vector_store = FAISS.from_texts(chunks, embedding=embeddings)
+        vector_store.save_local("faiss_index")
+
+        return jsonify({
+            "message": "Documents processed successfully",
+            "files_processed": len(pdf_files),
+            "chunks_created": len(chunks),
+            "status": "FAISS index created"
+        }), 200
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/index-status', methods=['GET'])
+def index_status():
+    """Check if FAISS index exists and is ready"""
+    index_exists = os.path.exists("faiss_index")
+    return jsonify({
+        "index_exists": index_exists,
+        "vector_store_loaded": vector_store is not None,
+        "uploaded_files": uploaded_files
+    }), 200
+
+
+@app.route('/chat', methods=['POST'])
+def chat():
+    """Chat endpoint - retrieves context from FAISS and queries Gemini"""
+    try:
+        # Get question from request
+        data = request.get_json()
+        if not data or 'question' not in data:
+            return jsonify({"error": "Question is required"}), 400
+
+        question = data.get('question', '').strip()
+        if not question:
+            return jsonify({"error": "Question cannot be empty"}), 400
+
+        # Check if FAISS index exists
         if not os.path.exists("faiss_index"):
-            raise HTTPException(status_code=404, detail="No documents uploaded. Please upload PDF files first.")
-        
-        new_db = FAISS.load_local(
-            "faiss_index", 
-            embeddings, 
+            return jsonify({"error": "No documents uploaded. Please upload PDF files first."}), 400
+
+        # Load FAISS index with HuggingFace embeddings
+        embeddings = HuggingFaceEmbeddings(
+            model_name="sentence-transformers/all-MiniLM-L6-v2",
+            model_kwargs={'device': 'cpu'},
+            encode_kwargs={'normalize_embeddings': True}
+        )
+
+        db = FAISS.load_local(
+            "faiss_index",
+            embeddings,
             allow_dangerous_deserialization=True
         )
-        docs = new_db.similarity_search(user_question)
-        
-        chain = get_conversational_chain()
-        response = chain(
-            {"input_documents": docs, "question": user_question}, 
-            return_only_outputs=True
+
+        # Search for relevant documents
+        docs = db.similarity_search(question, k=4)
+
+        # Create context from retrieved documents
+        context = "\n\n".join([doc.page_content for doc in docs])
+
+        # Create prompt template
+        prompt_template = ChatPromptTemplate.from_template("""
+Answer the question as detailed as possible from the provided context. Make sure to provide all the details.
+If the answer is not in the provided context, just say "answer is not available in the context".
+Don't provide the wrong answer.
+
+Context:
+{context}
+
+Question:
+{question}
+
+Answer:""")
+
+        # Initialize Gemini model (using gemini-2.0-flash)
+        model = ChatGoogleGenerativeAI(
+            model="gemini-2.0-flash",
+            temperature=0.3,
+            google_api_key=os.getenv("GOOGLE_API_KEY"),
+            convert_system_message_to_human=True
         )
-        
-        return {
-            "answer": response["output_text"],
+
+        # Create chain and invoke
+        chain = prompt_template | model
+        response = chain.invoke({"context": context, "question": question})
+
+        return jsonify({
+            "answer": response.content,
             "source_documents": [doc.page_content[:200] + "..." for doc in docs[:3]]
-        }
+        }), 200
+
     except Exception as e:
-        logger.error(f"Error processing user input: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error processing question: {str(e)}")
+        return jsonify({"error": f"Chat failed: {str(e)}"}), 500
 
-@app.get("/")
-async def root():
-    """Health check endpoint"""
-    return {"message": "Cloud AI Assistant API is running", "status": "healthy"}
-
-@app.post("/upload", response_model=UploadResponse)
-async def upload_files(files: List[UploadFile] = File(...)):
-    """Upload and process PDF files"""
-    if not files:
-        raise HTTPException(status_code=400, detail="No files provided")
-    
-    pdf_files = []
-    temp_files = []
-    
-    try:
-        # Save uploaded files temporarily
-        for file in files:
-            if not file.filename.endswith('.pdf'):
-                raise HTTPException(status_code=400, detail=f"Only PDF files are allowed. Got: {file.filename}")
-            
-            temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.pdf')
-            temp_files.append(temp_file.name)
-            
-            content = await file.read()
-            temp_file.write(content)
-            temp_file.close()
-            
-            pdf_files.append(temp_file.name)
-        
-        # Process PDFs
-        text = get_pdf_text(pdf_files)
-        if not text.strip():
-            raise HTTPException(status_code=400, detail="No text could be extracted from the PDF files")
-        
-        chunks = get_text_chunks(text)
-        global vector_store
-        vector_store = create_vector_store(chunks)
-        
-        return UploadResponse(
-            message="Files uploaded and processed successfully",
-            files_processed=len(files)
-        )
-    
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error uploading files: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error processing files: {str(e)}")
-    
-    finally:
-        # Clean up temporary files
-        for temp_file in temp_files:
-            try:
-                os.unlink(temp_file)
-            except:
-                pass
-
-@app.post("/chat", response_model=ChatResponse)
-async def chat(request: QuestionRequest):
-    """Chat with the cloud AI assistant"""
-    if not request.question.strip():
-        raise HTTPException(status_code=400, detail="Question cannot be empty")
-    
-    try:
-        response = process_user_input(request.question)
-        return ChatResponse(
-            answer=response["answer"],
-            source_documents=response["source_documents"]
-        )
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error in chat endpoint: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error processing chat: {str(e)}")
-
-@app.get("/health")
-async def health_check():
-    """Health check endpoint"""
-    return {
-        "status": "healthy",
-        "vector_store_loaded": os.path.exists("faiss_index"),
-        "google_api_configured": bool(os.getenv("GOOGLE_API_KEY"))
-    }
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000)
-
+    app.run(host="0.0.0.0", port=8000, debug=True)
